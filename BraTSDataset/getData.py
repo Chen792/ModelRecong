@@ -6,6 +6,7 @@ from monai.transforms import (
 )
 from torch.utils.data import random_split
 from BraTSDataset.BraTSDataset import BraTSDataset
+os.makedirs(r'../data/BraTS2021_preprocess',exist_ok=True)
 data_dir = r'../data/BraTS2021_preprocess'
 # 构造 image-seg 字典
 cases = []

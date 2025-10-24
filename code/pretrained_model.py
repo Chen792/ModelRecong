@@ -60,15 +60,18 @@ if __name__=='__main__':
 
     #baseline
     baseline=copy.deepcopy(model)
+    os.makedirs('../save_model/baseline',exist_ok=True)
     baseline=train_epochs(baseline,train_loader,val_dataset,device,10,None)
     torch.save(baseline.state_dict(),'../save_model/baseline/model.pth')
     #al
+    os.makedirs('../high_value_dataset',exist_ok=True)
     al_model=copy.deepcopy(model)
     al_model,labeled_idx=active_learning_loop(al_model,train_dataset,val_dataset,device,transforms)
     with open(f'../high_value_dataset/labeled_idx.pkl','wb') as f:
         pickle.dump(labeled_idx,f)
     torch.save(al_model.state_dict(),'../save_model/al_model/model.pth')
     #ensemble
+    os.makedirs(f'../save_model/ensemble',exist_ok=True)
     ens_model=copy.deepcopy(model)
     ens_model=ensemble_train_model(train_dataset)
     for i,m in enumerate(ens_model):
@@ -76,6 +79,7 @@ if __name__=='__main__':
 
     # al+ensemble
     al_ens_model=copy.deepcopy(model)
+    os.makedirs(f'../save_model/al_and_ensemble',exist_ok=True)
     with open(f'../high_value_dataset/labeled_idx.pkl','rb') as f:
         labeled_idx=pickle.load(f)
     train_set = torch.utils.data.Subset(BraTSDataset, list(labeled_idx))
