@@ -1,4 +1,26 @@
-文件解析：
+怎么开始？
+
+由于有些数据过大，因此并没有一起上传到github，有一些文件夹需要自己手动创建。因为os.makedir并没有做的很全面。如果有文件路径不存在等问题，可以看一看对应位置，是不是有的文件夹没有创建。
+
+首先下载项目以后，进行数据集的处理。
+
+下载数据集以后，运行code/get_preprocess_data.py,更改其中的data_dir变量为自己存放数据集的文件路径。以下为示例，具体数据集我会放在群里。
+
+一个BraTS2021的数据由五张照片组成
+
+<img width="767" height="145" alt="image" src="https://github.com/user-attachments/assets/7f9b782b-89a8-43a7-9824-29c373b1c910" />
+
+data_dir改到这个路径就好
+
+<img width="592" height="191" alt="image" src="https://github.com/user-attachments/assets/2df558fe-0f96-4863-bfcc-fb2efd44d9b7" />
+
+运行好后，data文件夹下会出现BraTS2021_preprocess, 每一个包括t1_pre和seg_pre
+
+然后运行code/pretrained_model.py来训练模型。以后如果对应路径下有模型的话可以不用运行。运行后，会创建一个save_model文件夹，下面有4个文件夹分别对应4种模型：baseline、ensemble、active learning、ensemble training with active learning。
+
+最后运行code/startModelRecong.py来测试。运行后会输出并保存一堆图，对应会创建SaveImg文件夹和log文件夹，可以看一下。
+
+文件解析：以下文件夹可能有的在运行结束后并没有，因为有些文件夹是观察中间运行结果的。比如prob_imgs和uncertainty。
 
 BraTSDataset:
 
