@@ -1,0 +1,25 @@
+seed: 42
+device: cuda
+
+train:
+  batch_size: 1
+  lr: 1e-4
+  epochs: 20
+  dropout: 0.2
+
+model:
+  in_channels: 4
+  out_channels: 4
+  channels: [32,64,128,256,512]
+  strides: [2,2,2,2]
+  num_res_units: 2
+
+active_learning:
+  initial_ratio: 0.2
+  budget: 5
+  rounds: 3
+  mc_T: 10
+
+metrics:
+  n_bins: 15
+  overlap_k: 100
