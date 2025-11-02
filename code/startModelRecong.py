@@ -10,23 +10,21 @@ from copy import deepcopy
 from monai.networks.nets import UNet
 from testModelAndShowImg import plot_all_map
 
-def save_and_show_img(image,
-                      uncertainty1,uncertainty2,
-                      error_mask1,error_mask2,
-                      probs1,probs2,
-                      seg,
-                      methodName1,methodName2,
-                      save_dir
-):
-    # ensemble vs al_and_ensemble
-    plot_all_map(image,
-                 uncertainty1, uncertainty2,
-                 error_mask1, error_mask2,
-                 probs1, probs2,
-                 seg,
-                 methodName1,
-                 methodName2,
-                 save_dir)
+# def save_and_show_img(image,
+#                       uncertainty1,uncertainty2,
+#                       error_mask1,error_mask2,
+#                       probs1,probs2,
+#                       seg,
+#                       methodName1,methodName2,
+#                       save_dir
+# ):
+#     plot_all_map(image,
+#                  uncertainty1, uncertainty2,
+#                  error_mask1, error_mask2,
+#                  probs1, probs2,
+#                  seg,
+#                  methodName1,methodName2,
+#                  save_dir)
 
 if __name__=='__main__':
 
@@ -152,19 +150,13 @@ if __name__=='__main__':
             continue
 
         #baseline vs almodel
-        save_and_show_img(image,baseline_uncertainty,al_model_uncertainty,baseline_error_mask,al_model_error_mask,baseline_probs,al_model_probs,seg,'baseline','almodel',f'../SaveImg/baseline_vs_al_model_{idx}')
+        plot_all_map(image,baseline_uncertainty,al_model_uncertainty,baseline_error_mask,al_model_error_mask,baseline_probs,al_model_probs,seg,'baseline','almodel',f'../SaveImg/baseline_vs_al_model_{idx}')
 
         #baseline vs ensemble
-        save_and_show_img(image,baseline_uncertainty,ens_model_uncertainty,baseline_error_mask,ens_model_error_mask,baseline_probs,ens_model_probs,seg,'baseline','ensemble',f'../SaveImg/baseline_vs_ensemble_{idx}')
+        plot_all_map(image,baseline_uncertainty,ens_model_uncertainty,baseline_error_mask,ens_model_error_mask,baseline_probs,ens_model_probs,seg,'baseline','ensemble',f'../SaveImg/baseline_vs_ensemble_{idx}')
 
         #baseline vs al_ensemble
-        save_and_show_img(image,baseline_uncertainty,al_ens_model_uncertainty,baseline_error_mask,al_ens_model_error_mask,baseline_probs,al_ens_model_probs,seg,'baseline','al_ensemble',f'../SaveImg/baseline_vs_al_ensemble_{idx}')
-
-        #al vs al_ensemble
-        save_and_show_img(image,al_model_uncertainty,al_ens_model_uncertainty,al_model_error_mask,al_ens_model_error_mask,al_model_probs,al_ens_model_probs,seg,'almodel','al_ensemble',f'../SaveImg/al_model_vs_al_ensemble_{idx}')
-
-        #ensemble vs al_and_ensemble
-        save_and_show_img(image,ens_model_uncertainty,al_ens_model_uncertainty,ens_model_error_mask,al_ens_model_error_mask,ens_model_probs,al_ens_model_probs,seg,'ensemble','al_and_ensemble',f'../SaveImg/ensemble_vs_al_ensemble_{idx}')
+        plot_all_map(image,baseline_uncertainty,al_ens_model_uncertainty,baseline_error_mask,al_ens_model_error_mask,baseline_probs,al_ens_model_probs,seg,'baseline','al_ensemble',f'../SaveImg/baseline_vs_al_ensemble_{idx}')
 
 
 

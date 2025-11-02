@@ -2,37 +2,322 @@ from monai.networks.nets import UNet
 from BraTSDataset.getData import getDatasetAndLoaderAndOthers
 import torch
 from monai.data import DataLoader
-import os
-from train_step import train_epochs
+import torch.nn.functional as F
+import numpy as np
+import copy
+from monai.losses import DiceLoss
+from monai.metrics import DiceMetric
 from torch.nn import init
+from notion_csv import save_metrics_csv
+from cal_num import compute_all_metrics
+import time
+import gc
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def force_memory_cleanup():
+    """强制内存清理函数"""
+    # 1. Python垃圾回收
+    gc.collect()
 
-device =torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-def weight_reset(m):
-    if isinstance(m, (torch.nn.Conv3d, torch.nn.Linear)):
-        init.kaiming_normal_(m.weight, nonlinearity='relu')
-        if m.bias is not None:
-            init.zeros_(m.bias)
-def ensemble_train_model(dataset):
-    models=[]
-    print('start ensemble train')
-    train_dataset,val_dataset,test_dataset,transforms,cases=getDatasetAndLoaderAndOthers()
-    train_loader=DataLoader(dataset,batch_size=1,shuffle=True)
-    #集成5个模型
-    for i in range(5):
-        print(f'{i} model start')
-        torch.manual_seed(42 + i*10)
-        model = UNet(spatial_dims=3,
-               in_channels=4,
-               out_channels=4,
-               channels=(32 ,64 ,128 ,256 ,512),
-               strides=(2 ,2 ,2 ,2),
-               num_res_units=2,
-               dropout=0.2).to(device)
-        model.apply(weight_reset)
-        es_model=train_epochs(model,train_loader,val_dataset,device,20,None)
-        models.append(es_model)
-        save_path = f"../save_model/ensemble/model{i}.pth"
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        torch.save(es_model.state_dict(), save_path)
-        print(f"模型参数已保存到 {save_path}")
-    return models
+    # 2. 清空GPU缓存
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()  # 等待所有操作完成
+
+    # 3. 清空CPU缓存（如果有GPU）
+    if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+        torch.cuda.reset_peak_memory_stats()
+def reinit_weights(model):
+    """权重重新初始化函数"""
+    for m in model.modules():
+        if isinstance(m, (torch.nn.Conv3d, torch.nn.Linear)):
+            torch.nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+            if m.bias is not None:
+                torch.nn.init.zeros_(m.bias)
+
+
+def create_bootstrap_dataset(dataset, seed=42, sample_ratio=0.8):
+    """为每个模型创建bootstrap采样子集"""
+    torch.manual_seed(seed)
+    dataset_size = len(dataset)
+    sample_size = int(dataset_size * sample_ratio)
+
+    # 有放回随机采样
+    indices = torch.randint(0, dataset_size, (sample_size,))
+    return torch.utils.data.Subset(dataset, indices)
+
+
+def create_diverse_model(model_idx):
+    """创建有差异的模型结构"""
+    # 不同的dropout率增加多样性
+    dropout_rates = [0.1, 0.2, 0.3, 0.15, 0.25]
+
+    # 轻微调整通道数
+    channels_variants = [
+        (32, 64, 128, 256, 512),  # 原始
+        (24, 48, 96, 192, 384),  # 稍小
+        (40, 80, 160, 320, 640),  # 稍大
+        (32, 64, 128, 256, 512),  # 保持两个原始大小
+        (28, 56, 112, 224, 448)  # 中间大小
+    ]
+
+    model = UNet(
+        spatial_dims=3,
+        in_channels=4,
+        out_channels=4,
+        channels=channels_variants[model_idx],
+        strides=(2, 2, 2, 2),
+        num_res_units=2,
+        dropout=dropout_rates[model_idx]
+    ).to(device)
+
+    return model
+
+
+def ensemble_train_model(dataset, num_models=5, base_epochs=20):
+    """专门的Ensemble模型训练函数"""
+    models = []
+    train_histories = []
+
+    print(' Starting Ensemble Training with Custom Training Loop')
+
+    # 获取验证数据集用于早停和模型选择
+    _, val_dataset, _, _, _ = getDatasetAndLoaderAndOthers()
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
+
+    # 训练每个模型
+    for model_idx in range(num_models):
+        print(f'\n Training Ensemble Model {model_idx + 1}/{num_models}')
+        start_time = time.time()
+
+        # 1. 创建不同的数据子集
+        model_dataset = create_bootstrap_dataset(dataset, seed=model_idx, sample_ratio=0.8)
+        print(f' Training data: {len(model_dataset)} samples')
+
+        # 2. 创建数据加载器
+        try:
+            train_loader = DataLoader(model_dataset, batch_size=1, shuffle=True,
+                                      num_workers=2, pin_memory=True)
+            print('Using batch_size=2')
+        except RuntimeError:
+            train_loader = DataLoader(model_dataset, batch_size=1, shuffle=True,
+                                      num_workers=2, pin_memory=True)
+            print('Using batch_size=1 due to memory constraints')
+
+        # 3. 创建有差异的模型
+        model = create_diverse_model(model_idx)
+        model.apply(reinit_weights)
+        print(f' Model config: dropout={model.dropout}, channels={model.channels}')
+
+        # 4. 设置不同的训练参数
+        epochs = base_epochs + model_idx * 3  # 不同的训练周期
+
+        # 5. 训练模型
+        trained_model, history = train_single_model(
+            model, train_loader, val_loader, epochs, model_idx
+        )
+
+        models.append(trained_model)
+        train_histories.append(history)
+
+        # 6. 计算训练时间
+        training_time = time.time() - start_time
+        print(f'Training completed in {training_time:.2f} seconds')
+
+        # 7. 验证模型多样性（与前一个模型比较）
+        if model_idx > 0:
+            diversity_score = check_model_diversity(models[0], trained_model, val_loader)
+            print(f'Diversity score vs model 0: {diversity_score:.4f}')
+
+    print('\nEnsemble training completed!')
+    return models, train_histories
+
+
+def train_single_model(model, train_loader, val_loader, epochs, model_idx):
+    """训练单个模型"""
+    # 设置不同的优化器
+    if model_idx % 3 == 0:
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        print(f'Optimizer: Adam, lr=0.001')
+    elif model_idx % 3 == 1:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.0008, weight_decay=0.01)
+        print(f'Optimizer: AdamW, lr=0.0008, weight_decay=0.01')
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, nesterov=True)
+        print(f'Optimizer: SGD, lr=0.01, momentum=0.9')
+
+    # 设置不同的学习率调度器
+    if model_idx % 2 == 0:
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+        print(f'Scheduler: StepLR (step_size=10, gamma=0.5)')
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+        print(f'Scheduler: CosineAnnealingLR (T_max={epochs})')
+
+    # 损失函数 - 使用DiceLoss，适合医学图像分割
+    criterion = DiceLoss(softmax=True, to_onehot_y=True, squared_pred=True)
+
+
+    best_val_dice = 0.0
+    best_model_wts = copy.deepcopy(model.state_dict())
+
+    print(f'Training for {epochs} epochs')
+    best_val_loss = 10000
+    for epoch in range(epochs):
+        # 训练阶段
+        model.train()
+        epoch_train_loss = 0.0
+        num_batches = 0
+
+        for batch_data in train_loader:
+            inputs = batch_data["image"].to(device)
+            seg = batch_data["seg"].to(device)
+            seg[seg==4]=3
+            optimizer.zero_grad()
+
+            # 前向传播
+            outputs = model(inputs)
+
+            # 计算损失
+            loss = criterion(outputs, seg)
+
+            if model_idx > 2:
+                l2_lambda = 0.001
+                l2_reg = torch.tensor(0.).to(device)
+                for param in model.parameters():
+                    l2_reg += torch.norm(param)
+                loss = loss + l2_lambda * l2_reg
+
+            # 反向传播
+            loss.backward()
+            optimizer.step()
+
+            epoch_train_loss += loss.item()
+            num_batches += 1
+
+        model.eval()
+        with torch.no_grad():
+            batch = next(iter(train_loader))
+            img = batch["image"].to(device)
+            seg = batch["seg"].to(device)
+            seg[seg == 4] = 3
+            pred = model(img)
+            pred = F.softmax(pred, dim=1)
+        avg_train_loss = epoch_train_loss / num_batches
+        dict = compute_all_metrics(pred, seg, device, 5)
+        save_metrics_csv("../logs/train_log.csv", epoch + 1, avg_train_loss, dict)
+        # 验证阶段
+        model.eval()
+        epoch_val_loss=0.0
+        val_batches = 0
+
+        with torch.no_grad():
+            for val_data in val_loader:
+                val_inputs = val_data["image"].to(device)
+                val_labels = val_data["seg"].to(device)
+                val_labels[val_labels==4]=3
+                val_outputs = model(val_inputs)
+                val_loss = criterion(val_outputs, val_labels)
+                epoch_val_loss += val_loss.item()
+                val_batches += 1
+
+        avg_val_loss = epoch_val_loss / val_batches
+        with torch.no_grad():
+            batch = next(iter(val_loader))
+            img = batch["image"].to(device)
+            seg = batch["seg"].to(device)
+            seg[seg == 4] = 3
+            pred = model(img)
+            pred = F.softmax(pred, dim=1)
+        dict = compute_all_metrics(pred, seg, device, 5)
+        save_metrics_csv("../logs/val_log.csv", epoch + 1, avg_val_loss, dict)
+
+        # 更新学习率
+        current_lr = optimizer.param_groups[0]['lr']
+        scheduler.step()
+
+        # 早停和模型保存
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_model_wts = model.state_dict().copy()
+
+        # 打印训练和验证损失
+        print(f"Epoch {epoch + 1}/{epochs},Val Loss: {avg_val_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{epochs},Val Loss: {avg_train_loss:.4f}")
+
+    if epoch % 5 == 0:
+        force_memory_cleanup()
+
+    # 加载最佳模型权重
+    model.load_state_dict(best_model_wts)
+    print(f'Best validation Dice: {best_val_dice:.4f}')
+
+    return model
+
+
+def check_model_diversity(model1, model2, val_loader):
+    """检查两个模型预测的多样性"""
+    model1.eval()
+    model2.eval()
+
+    disagreements = 0
+    total_samples = 0
+
+    with torch.no_grad():
+        for batch_data in val_loader:
+            inputs = batch_data["image"].to(device)
+
+            # 获取两个模型的预测
+            pred1 = torch.argmax(model1(inputs), dim=1)
+            pred2 = torch.argmax(model2(inputs), dim=1)
+
+            # 计算不一致的像素比例
+            disagreement = (pred1 != pred2).float().mean().item()
+            disagreements += disagreement
+            total_samples += 1
+
+    diversity_score = disagreements / total_samples if total_samples > 0 else 0
+    return diversity_score
+
+
+def plot_training_history(histories):
+    """绘制训练历史（可选）"""
+    try:
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+
+        for i, history in enumerate(histories):
+            # 训练损失
+            axes[0, 0].plot(history['train_loss'], label=f'Model {i + 1}')
+            axes[0, 0].set_title('Training Loss')
+            axes[0, 0].legend()
+
+            # 验证损失
+            axes[0, 1].plot(history['val_loss'], label=f'Model {i + 1}')
+            axes[0, 1].set_title('Validation Loss')
+            axes[0, 1].legend()
+
+            # 验证Dice
+            axes[1, 0].plot(history['val_dice'], label=f'Model {i + 1}')
+            axes[1, 0].set_title('Validation Dice')
+            axes[1, 0].legend()
+
+            # 学习率
+            axes[1, 1].plot(history['learning_rates'], label=f'Model {i + 1}')
+            axes[1, 1].set_title('Learning Rate')
+            axes[1, 1].legend()
+
+        plt.tight_layout()
+        plt.show()
+
+    except ImportError:
+        print("Matplotlib not available for plotting")
+
+
+# 使用示例
+if __name__ == "__main__":
+    # 获取训练数据集
+    train_dataset, _, _, _, _ = getDatasetAndLoaderAndOthers()
+
+    # 训练集成模型
+    models = ensemble_train_model(train_dataset)

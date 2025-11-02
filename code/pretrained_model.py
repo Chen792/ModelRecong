@@ -58,18 +58,20 @@ if __name__=='__main__':
 
     #保存模型，方便后续启动
 
-    #baseline
-    baseline=copy.deepcopy(model)
-    os.makedirs('../save_model/baseline',exist_ok=True)
-    baseline=train_epochs(baseline,train_loader,val_dataset,device,10,None)
-    torch.save(baseline.state_dict(),'../save_model/baseline/model.pth')
-    #al
-    os.makedirs('../high_value_dataset',exist_ok=True)
-    al_model=copy.deepcopy(model)
-    al_model,labeled_idx=active_learning_loop(al_model,train_dataset,val_dataset,device,transforms)
-    with open(f'../high_value_dataset/labeled_idx.pkl','wb') as f:
-        pickle.dump(labeled_idx,f)
-    torch.save(al_model.state_dict(),'../save_model/al_model/model.pth')
+    # #baseline
+    # baseline=copy.deepcopy(model)
+    # os.makedirs('../save_model/baseline',exist_ok=True)
+    # baseline=train_epochs(baseline,train_loader,val_loader,device,10,None)
+    # torch.save(baseline.state_dict(),'../save_model/baseline/model.pth')
+    #
+    # #al
+    # os.makedirs('../high_value_dataset',exist_ok=True)
+    # al_model=copy.deepcopy(model)
+    # al_model,labeled_idx=active_learning_loop(al_model,train_dataset,val_loader,device,transforms)
+    # with open(f'../high_value_dataset/labeled_idx.pkl','wb') as f:
+    #     pickle.dump(labeled_idx,f)
+    # torch.save(al_model.state_dict(),'../save_model/al_model/model.pth')
+    #
     #ensemble
     os.makedirs(f'../save_model/ensemble',exist_ok=True)
     ens_model=copy.deepcopy(model)
