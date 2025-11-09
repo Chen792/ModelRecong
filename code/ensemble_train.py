@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import numpy as np
 import copy
 from monai.losses import DiceLoss
-from monai.metrics import DiceMetric
 from torch.nn import init
 from notion_csv import save_metrics_csv
 from cal_num import compute_all_metrics
@@ -34,7 +33,6 @@ def reinit_weights(model):
             if m.bias is not None:
                 torch.nn.init.zeros_(m.bias)
 
-
 def create_bootstrap_dataset(dataset, seed=42, sample_ratio=0.8):
     """为每个模型创建bootstrap采样子集"""
     torch.manual_seed(seed)
@@ -46,28 +44,16 @@ def create_bootstrap_dataset(dataset, seed=42, sample_ratio=0.8):
     return torch.utils.data.Subset(dataset, indices)
 
 
-def create_diverse_model(model_idx):
-    """创建有差异的模型结构"""
-    # 不同的dropout率增加多样性
-    dropout_rates = [0.1, 0.2, 0.3, 0.15, 0.25]
-
-    # 轻微调整通道数
-    channels_variants = [
-        (32, 64, 128, 256, 512),  # 原始
-        (24, 48, 96, 192, 384),  # 稍小
-        (40, 80, 160, 320, 640),  # 稍大
-        (32, 64, 128, 256, 512),  # 保持两个原始大小
-        (28, 56, 112, 224, 448)  # 中间大小
-    ]
+def create_diverse_model():
 
     model = UNet(
         spatial_dims=3,
         in_channels=4,
         out_channels=4,
-        channels=channels_variants[model_idx],
+        channels=[32,64,128,256,512],
         strides=(2, 2, 2, 2),
         num_res_units=2,
-        dropout=dropout_rates[model_idx]
+        dropout=0.2
     ).to(device)
 
     return model
@@ -76,94 +62,66 @@ def create_diverse_model(model_idx):
 def ensemble_train_model(dataset, num_models=5, base_epochs=20):
     """专门的Ensemble模型训练函数"""
     models = []
-    train_histories = []
-
-    print(' Starting Ensemble Training with Custom Training Loop')
-
     # 获取验证数据集用于早停和模型选择
     _, val_dataset, _, _, _ = getDatasetAndLoaderAndOthers()
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
 
     # 训练每个模型
     for model_idx in range(num_models):
-        print(f'\n Training Ensemble Model {model_idx + 1}/{num_models}')
         start_time = time.time()
 
         # 1. 创建不同的数据子集
         model_dataset = create_bootstrap_dataset(dataset, seed=model_idx, sample_ratio=0.8)
-        print(f' Training data: {len(model_dataset)} samples')
 
         # 2. 创建数据加载器
         try:
             train_loader = DataLoader(model_dataset, batch_size=1, shuffle=True,
                                       num_workers=2, pin_memory=True)
-            print('Using batch_size=2')
         except RuntimeError:
             train_loader = DataLoader(model_dataset, batch_size=1, shuffle=True,
                                       num_workers=2, pin_memory=True)
-            print('Using batch_size=1 due to memory constraints')
 
         # 3. 创建有差异的模型
-        model = create_diverse_model(model_idx)
+        model = create_diverse_model()
         model.apply(reinit_weights)
-        print(f' Model config: dropout={model.dropout}, channels={model.channels}')
-
         # 4. 设置不同的训练参数
-        epochs = base_epochs + model_idx * 3  # 不同的训练周期
+        epochs = base_epochs
 
         # 5. 训练模型
-        trained_model, history = train_single_model(
-            model, train_loader, val_loader, epochs, model_idx
+        trained_model = train_single_model(
+            model, train_loader, val_loader, epochs
         )
 
         models.append(trained_model)
-        train_histories.append(history)
-
         # 6. 计算训练时间
         training_time = time.time() - start_time
         print(f'Training completed in {training_time:.2f} seconds')
 
-        # 7. 验证模型多样性（与前一个模型比较）
-        if model_idx > 0:
-            diversity_score = check_model_diversity(models[0], trained_model, val_loader)
-            print(f'Diversity score vs model 0: {diversity_score:.4f}')
-
     print('\nEnsemble training completed!')
-    return models, train_histories
+    return models
 
 
-def train_single_model(model, train_loader, val_loader, epochs, model_idx):
-    """训练单个模型"""
-    # 设置不同的优化器
-    if model_idx % 3 == 0:
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-        print(f'Optimizer: Adam, lr=0.001')
-    elif model_idx % 3 == 1:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=0.0008, weight_decay=0.01)
-        print(f'Optimizer: AdamW, lr=0.0008, weight_decay=0.01')
-    else:
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, nesterov=True)
-        print(f'Optimizer: SGD, lr=0.01, momentum=0.9')
+def train_single_model(model, train_loader, val_loader, epochs):
+    UNIFIED_LR = 0.0008
+    UNIFIED_WEIGHT_DECAY = 0.01
 
-    # 设置不同的学习率调度器
-    if model_idx % 2 == 0:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-        print(f'Scheduler: StepLR (step_size=10, gamma=0.5)')
-    else:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-        print(f'Scheduler: CosineAnnealingLR (T_max={epochs})')
+    optimizer = torch.optim.AdamW(model.parameters(), lr=UNIFIED_LR, weight_decay=UNIFIED_WEIGHT_DECAY)
+    print(f'Optimizer: AdamW (UNIFIED), lr={UNIFIED_LR}, weight_decay={UNIFIED_WEIGHT_DECAY}')
 
-    # 损失函数 - 使用DiceLoss，适合医学图像分割
+    # 【修改：统一使用 Cosine Annealing 学习率调度器】
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    print(f'Scheduler: CosineAnnealingLR (UNIFIED), T_max={epochs}')
+
+    # 损失函数 (保持不变)
     criterion = DiceLoss(softmax=True, to_onehot_y=True, squared_pred=True)
 
-
-    best_val_dice = 0.0
     best_model_wts = copy.deepcopy(model.state_dict())
 
     print(f'Training for {epochs} epochs')
     best_val_loss = 10000
     for epoch in range(epochs):
         # 训练阶段
+        start=time.time()
         model.train()
         epoch_train_loss = 0.0
         num_batches = 0
@@ -180,20 +138,13 @@ def train_single_model(model, train_loader, val_loader, epochs, model_idx):
             # 计算损失
             loss = criterion(outputs, seg)
 
-            if model_idx > 2:
-                l2_lambda = 0.001
-                l2_reg = torch.tensor(0.).to(device)
-                for param in model.parameters():
-                    l2_reg += torch.norm(param)
-                loss = loss + l2_lambda * l2_reg
-
             # 反向传播
             loss.backward()
             optimizer.step()
 
             epoch_train_loss += loss.item()
             num_batches += 1
-
+        end=time.time()
         model.eval()
         with torch.no_grad():
             batch = next(iter(train_loader))
@@ -204,6 +155,7 @@ def train_single_model(model, train_loader, val_loader, epochs, model_idx):
             pred = F.softmax(pred, dim=1)
         avg_train_loss = epoch_train_loss / num_batches
         dict = compute_all_metrics(pred, seg, device, 5)
+        dict['time']=end-start
         save_metrics_csv("../logs/train_log.csv", epoch + 1, avg_train_loss, dict)
         # 验证阶段
         model.eval()
@@ -231,8 +183,6 @@ def train_single_model(model, train_loader, val_loader, epochs, model_idx):
         dict = compute_all_metrics(pred, seg, device, 5)
         save_metrics_csv("../logs/val_log.csv", epoch + 1, avg_val_loss, dict)
 
-        # 更新学习率
-        current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
         # 早停和模型保存
@@ -242,14 +192,14 @@ def train_single_model(model, train_loader, val_loader, epochs, model_idx):
 
         # 打印训练和验证损失
         print(f"Epoch {epoch + 1}/{epochs},Val Loss: {avg_val_loss:.4f}")
-        print(f"Epoch {epoch + 1}/{epochs},Val Loss: {avg_train_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{epochs},train Loss: {avg_train_loss:.4f}")
 
     if epoch % 5 == 0:
         force_memory_cleanup()
 
     # 加载最佳模型权重
     model.load_state_dict(best_model_wts)
-    print(f'Best validation Dice: {best_val_dice:.4f}')
+    print(f'Best validation Dice: {best_val_loss:.4f}')
 
     return model
 
@@ -278,40 +228,6 @@ def check_model_diversity(model1, model2, val_loader):
     diversity_score = disagreements / total_samples if total_samples > 0 else 0
     return diversity_score
 
-
-def plot_training_history(histories):
-    """绘制训练历史（可选）"""
-    try:
-        import matplotlib.pyplot as plt
-
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-
-        for i, history in enumerate(histories):
-            # 训练损失
-            axes[0, 0].plot(history['train_loss'], label=f'Model {i + 1}')
-            axes[0, 0].set_title('Training Loss')
-            axes[0, 0].legend()
-
-            # 验证损失
-            axes[0, 1].plot(history['val_loss'], label=f'Model {i + 1}')
-            axes[0, 1].set_title('Validation Loss')
-            axes[0, 1].legend()
-
-            # 验证Dice
-            axes[1, 0].plot(history['val_dice'], label=f'Model {i + 1}')
-            axes[1, 0].set_title('Validation Dice')
-            axes[1, 0].legend()
-
-            # 学习率
-            axes[1, 1].plot(history['learning_rates'], label=f'Model {i + 1}')
-            axes[1, 1].set_title('Learning Rate')
-            axes[1, 1].legend()
-
-        plt.tight_layout()
-        plt.show()
-
-    except ImportError:
-        print("Matplotlib not available for plotting")
 
 
 # 使用示例

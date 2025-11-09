@@ -268,7 +268,7 @@ def plot_all_map(image,U_base, U_method, err_mask_base, err_mask_method,probs_ba
     plot_reliability(probs_flatten_base,probs_flatten_method, sample_labels,ax9, label1=f'{methodName1}',label2=f'{methodName2}' )  # baseline
 
     #risk_coverage
-    plot_risk_coverage(probs_flatten_base,probs_flatten_method, sample_labels, ax10, label1=f"{methodName1}",label2=f"{methodName2}")
+    plot_risk_coverage(probs_flatten_base.detach().cpu().numpy(),probs_flatten_method.detach().cpu().numpy(), sample_labels, ax10, label1=f"{methodName1}",label2=f"{methodName2}")
 
     #segment img
     pred_base = torch.argmax(probs_base, dim=0)[:, :, mid_slice].cpu()

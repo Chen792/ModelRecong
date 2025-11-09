@@ -10,7 +10,7 @@ def cal_prob(pred):
     """
     os.makedirs("../prob_imgs", exist_ok=True)
     probs = pred.detach().cpu().numpy()[0]  # shape: [C, H, W, D]
-    return probs #[C,H,W,D]
+    return torch.from_numpy(probs)  #[C,H,W,D]
 
 #计算不确定性
 def cal_uncertainty_online(model,image,device,T,is_Multi):

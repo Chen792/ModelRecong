@@ -4,28 +4,27 @@ import random
 from monai.data import DataLoader
 from BraTSDataset.getData import getDatasetAndLoaderAndOthers
 import torch
-from predict_func import Single_Model_pred,Mutil_Model_pred
+from predict_func import Single_Model_pred,Mutil_Model_pred,calculate_dice_score
 from cal_uncertainty_probs import cal_uncertainty_online,cal_prob
 from copy import deepcopy
 from monai.networks.nets import UNet
 from testModelAndShowImg import plot_all_map
 
-# def save_and_show_img(image,
-#                       uncertainty1,uncertainty2,
-#                       error_mask1,error_mask2,
-#                       probs1,probs2,
-#                       seg,
-#                       methodName1,methodName2,
-#                       save_dir
-# ):
-#     plot_all_map(image,
-#                  uncertainty1, uncertainty2,
-#                  error_mask1, error_mask2,
-#                  probs1, probs2,
-#                  seg,
-#                  methodName1,methodName2,
-#                  save_dir)
 
+def get_normalized_weights(scores):
+    """根据性能分数计算归一化权重。"""
+    total_score = sum(scores)
+    num_models = len(scores)
+
+    if total_score == 0:
+        # 防止除以零，如果所有模型都很差，退化为简单平均
+        weights = [1.0 / num_models] * num_models
+        print("Warning: All model scores are zero. Using simple averaging.")
+    else:
+        # 权重 = (该模型的Dice Score) / (所有模型的Dice Score之和)
+        weights = [score / total_score for score in scores]
+
+    return weights
 if __name__=='__main__':
 
     #加载模型，进行推理预测
@@ -33,6 +32,7 @@ if __name__=='__main__':
     train_dataset, val_dataset, test_dataset, transforms, cases=getDatasetAndLoaderAndOthers()
     #只进行推理
     test_loader=DataLoader(test_dataset,batch_size=1,shuffle=False)
+    val_loader=DataLoader(val_dataset,batch_size=1,shuffle=False)
 
     #随机3个需要展示图片的plot
     sample_indices = random.sample(range(len(test_loader.dataset)),3)
@@ -49,28 +49,52 @@ if __name__=='__main__':
 
     al_model = deepcopy(model).to(device)
     al_model.load_state_dict(torch.load('../save_model/al_model/model.pth'))
-
+    #
     ensemble_models = []
-    for i in range(5):
-        model = deepcopy(model).to(device)
-        model.load_state_dict(torch.load(f'../save_model/ensemble/model{i}.pth'))
-        ensemble_models.append(model)
+    dropout_rates = 0.2
 
+    for i in range(5):
+        ensemble_model = UNet(
+            spatial_dims=3,
+            in_channels=4,
+            out_channels=4,
+            channels=[32,64,128,256,512],
+            strides=(2, 2, 2, 2),
+            num_res_units=2,
+            dropout=dropout_rates
+        ).to(device)
+        ensemble_model.load_state_dict(torch.load(f'../save_model/ensemble/model{i}.pth'))
+        ensemble_models.append(ensemble_model)
+    #
     al_ensemble_models = []
     for i in range(5):
-        model = deepcopy(model).to(device)
-        model.load_state_dict(torch.load(f'../save_model/al_and_ensemble/model{i}.pth'))
-        al_ensemble_models.append(model)
+        al_ensemble_model = UNet(
+            spatial_dims=3,
+            in_channels=4,
+            out_channels=4,
+            channels=[32,64,128,256,512],
+            strides=(2, 2, 2, 2),
+            num_res_units=2,
+            dropout=dropout_rates
+        ).to(device)
+        al_ensemble_model.load_state_dict(torch.load(f'../save_model/al_and_ensemble/model{i}.pth'))
+        al_ensemble_models.append(al_ensemble_model)
 
     os.makedirs(f'../SaveImg',exist_ok=True)
     #保存所有推理过程的中间结果，最后随机输出三张图
+    ens_dice_scores = [calculate_dice_score(model, val_loader, device) for model in ensemble_models]
+    ens_weights = get_normalized_weights(ens_dice_scores)
+
+    al_ens_dice_scores = [calculate_dice_score(model, val_loader, device) for model in al_ensemble_models]
+    al_ens_weights = get_normalized_weights(al_ens_dice_scores)
 
     for idx,batch in enumerate(test_loader):
         image=batch['image'].to(device) #[B,C,H,W,D]
         seg=batch['seg'].to(device) #[B,C,H,W,D]
         seg=seg.squeeze()
         case_idx=batch['case_idx']
-
+        # print('img shape is',image.shape)
+        # print('seg shape is',seg.shape)
         # baseline的推理
 
         baseline_pred,baseline_prob_labels=Single_Model_pred(image,device,baseline_model,False)
@@ -111,7 +135,7 @@ if __name__=='__main__':
 
         #ens_model的推理
 
-        ens_model_pred, ens_model_prob_labels = Mutil_Model_pred(image, device, ensemble_models,False)
+        ens_model_pred, ens_model_prob_labels = Mutil_Model_pred(image, device, ensemble_models,False,ens_weights)
         ens_model_list = []
         ens_model_prob_labels=ens_model_prob_labels.squeeze(0)
 
@@ -129,7 +153,7 @@ if __name__=='__main__':
 
         # al_ens_model的推理
 
-        al_ens_model_pred, al_ens_model_prob_labels = Mutil_Model_pred(image, device, al_ensemble_models,False)
+        al_ens_model_pred, al_ens_model_prob_labels = Mutil_Model_pred(image, device, al_ensemble_models,False,al_ens_weights)
         al_ens_model_list = []
         al_ens_model_prob_labels=al_ens_model_prob_labels.squeeze(0)
 
@@ -148,7 +172,7 @@ if __name__=='__main__':
         if idx not in sample_indices:
             torch.cuda.empty_cache()
             continue
-
+        os.makedirs(f'../SaveImg',exist_ok=True)
         #baseline vs almodel
         plot_all_map(image,baseline_uncertainty,al_model_uncertainty,baseline_error_mask,al_model_error_mask,baseline_probs,al_model_probs,seg,'baseline','almodel',f'../SaveImg/baseline_vs_al_model_{idx}')
 

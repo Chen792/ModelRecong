@@ -32,6 +32,7 @@ def train_epochs(model, train_loader, val_dataloader, device, epochs, loss_fn=No
     :param loss_fn:     外部自定义损失，None 就用默认 DiceLoss
     :return:            训练好的模型
     """
+    import time
     force_memory_cleanup()
     print('start to train')
     # 1. 默认用Dice损失
@@ -39,10 +40,10 @@ def train_epochs(model, train_loader, val_dataloader, device, epochs, loss_fn=No
         loss_fn = monai.losses.DiceLoss(to_onehot_y=True, softmax=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs,eta_min=1e-6)
-    best_val_dice=0.0
     best_model_state=None
     os.makedirs(f'../logs',exist_ok=True)
     for epoch in range(epochs):
+        start=time.time()
         best_val_loss=10000
         model.train()
         running_loss=0.0
@@ -69,6 +70,9 @@ def train_epochs(model, train_loader, val_dataloader, device, epochs, loss_fn=No
             pred = model(img)
             pred = F.softmax(pred, dim=1)
         dict = compute_all_metrics(pred, seg, device, 5)
+        end=time.time()
+        train_time=end-start
+        dict['time']=train_time
         save_metrics_csv("../logs/train_log.csv", epoch + 1, avg_loss, dict)
         if val_dataloader is not None:
             val_loss = 0.0
@@ -97,7 +101,6 @@ def train_epochs(model, train_loader, val_dataloader, device, epochs, loss_fn=No
 
             # 打印训练和验证损失
             print(f"Epoch {epoch + 1}/{epochs},Val Loss: {avg_val_loss:.4f}")
-
         if epoch%5==0:
             force_memory_cleanup()
         # 打印平均损失
