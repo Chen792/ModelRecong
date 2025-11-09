@@ -18,7 +18,7 @@ data_dir改到这个路径就好
 
 运行好后，data文件夹下会出现BraTS2021_preprocess, 每一个包括t1_pre和seg_pre
 
-然后运行code/pretrained_model.py来训练模型。以后如果对应路径下有模型的话可以不用运行。运行后，会创建一个save_model文件夹，下面有4个文件夹分别对应4种模型：baseline、ensemble、active learning、ensemble training with active learning。
+然后运行code/pretrained_model.py来训练模型。注意把baseline和al的训练代码解除注释状态，提交以后才想起来没接触，大家记得，要不然只训练ensemble和al+ensemble两个集成模型。以后如果对应路径下有模型的话可以不用运行。运行后，会创建一个save_model文件夹，下面有4个文件夹分别对应4种模型：baseline、ensemble、active learning、ensemble training with active learning。
 
 最后运行code/startModelRecong.py来测试。运行后会输出并保存一堆图，对应会创建SaveImg文件夹和log文件夹，可以看一下。
 
