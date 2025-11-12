@@ -1,3 +1,5 @@
+运行出现问题了？看最后的几个问题介绍
+
 怎么开始？
 
 由于有些数据过大，因此并没有一起上传到github，有一些文件夹需要自己手动创建。因为os.makedir并没有做的很全面。如果有文件路径不存在等问题，可以看一看对应位置，是不是有的文件夹没有创建。
@@ -123,3 +125,20 @@ train_step:
 2、指标有些高，需要进一步炼丹
 
 3、CoT还需要加到预测环节中，而且CoT具体实现细则还没讨论好怎么实现
+
+
+问题介绍以及解决办法
+
+1、get_preprocess_data运行以后，data文件夹路径错误：运行代码的时候要保证路径在modelrecong/code下
+
+2、找不到BraTS2021这个包：加入如下代码：
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+本质上是因为sys的path里没有modelrecog这个路径，文件不知道在这个路径下找到对应的包。只知道可以导入code文件夹下的文件，而code同级的文件夹下的就找不到。因此加入这一行代码，这行代码加在一开始运行的文件即可。
+
+3、没有torch_C这个库：主要是因为下载的torch是没有gpu版本的，本项目在训练的时候内存只有60G，无法完全承载训练要求，因此只能每一轮epoch训练以后清空gpu内存。不用gpu训练的话会很慢很慢。gpu训练整套流程花了大概40h？可恶！因此需要gpu。
+因为用的monai和python兼容的原因。用到的版本是monai1.5和python3.10，对应的torch是2.7.1+cuda11.8，但是我在测试的时候好像直接install requirements的时候下载不了？？所以直接手动下载吧，去官网里找对应的老版本然后下到本地。其余的包应该可以下。如果pip install无法生效就用conda install吧。
+
+
+
+
+
